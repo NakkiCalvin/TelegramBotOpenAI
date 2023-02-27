@@ -1,5 +1,5 @@
-﻿using System.Text;
-using EtoZheTelegramBot.Models;
+﻿using EtoZhePackageOpenAI.OpenAIHandler;
+using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 
 using Telegram.Bot;
@@ -10,11 +10,17 @@ using Telegram.Bot.Types.Enums;
 
 using CancellationTokenSource cts = new();
 
-// Get this token via BotFather on telegram
-var botClient = new TelegramBotClient("{YOUR_ACCESS_TOKEN_HERE}");
-var httpClient = new HttpClient();
+var configuration = new ConfigurationBuilder()
+     .AddJsonFile($"config.json");
 
-httpClient.DefaultRequestHeaders.Add("authorization", "Bearer {YOUR_OPEN_AI_ACCESS_TOKEN_HERE}");
+var config = configuration.Build();
+
+var botToken = config.GetRequiredSection("Settings").GetValue<string>("Token");
+
+// Get this token via BotFather on telegram
+var botClient = new TelegramBotClient(botToken);
+
+var openAiHandler = new OpenAIHandler(config);
 
 Console.WriteLine("Bot have been started " + botClient.GetMeAsync().Result.FirstName);
 
@@ -62,47 +68,9 @@ async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, Cancel
         return;
     }
 
-    var json = JsonConvert.SerializeObject(
-        new OpenAIRequest
-        {
-            Model = "text-davinci-003", // or 001 cheaper
-            Prompt = messageText,
-            Temperature = 1, // 0.7 or lower result will be more accuracy
-            MaxTokens = 500, // how many symbols in response text
-        });
+    var guess = await openAiHandler.HandleOpenAIRequest(messageText, cancellationToken);
 
-    var request = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/completions")
-    {
-        Content = new StringContent(json, Encoding.UTF8, "application/json")
-    };
-
-    using var response = await httpClient.SendAsync(request, cancellationToken);
-    var responseJson = await response.Content.ReadAsStringAsync();
-
-    if (!response.IsSuccessStatusCode)
-    {
-        await botClient.SendTextMessageAsync(
-            message.Chat,
-            $"Try again later openAI has an error RequestContent: {json}, StatusCode: '{(int)response.StatusCode}', ResponseContent: '{responseJson}'",
-            cancellationToken: cancellationToken);
-        return;
-    }
-
-    try
-    {
-        var dyData = JsonConvert.DeserializeObject<dynamic>(responseJson);
-
-        var guess = dyData!.choices[0].text;
-
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"---> My guess is: {guess}");
-        Console.ResetColor();
-        await botClient.SendTextMessageAsync(message.Chat, $"{guess}", cancellationToken: cancellationToken);
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"---> Could not deserialize the JSON: {ex.Message}");
-    }
+    await botClient.SendTextMessageAsync(message.Chat, guess, cancellationToken: cancellationToken);
 }
 
 Task HandlePollingErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
